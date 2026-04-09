@@ -1,0 +1,11 @@
+{
+   "$author" : "bas080",
+   "$version" : "0.0.0",
+   "dev_state" : "ACTIVELY_DEVELOPED",
+   "license" : "LGPL-2.1-only",
+   "media_license" : "LGPL-2.1-only",
+   "name" : "place_names",
+   "short_description" : "Luanti Mod that adds command to create, edit place names that are visible on player hud.",
+   "title" : "Place Names",
+   "type" : "MOD"
+}
