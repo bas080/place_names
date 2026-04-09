@@ -1,3 +1,5 @@
+-- luacheck: read_globals core
+
 local DEFAULT_RADIUS = 10
 local world_path = core.get_worldpath()
 local places_file = world_path .. "/places.json"
