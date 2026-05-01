@@ -1,14 +1,22 @@
--- luacheck: read_globals core
+local DEFAULT_RADIUS = 20
+local CELL_SIZE = 50
 
-local DEFAULT_RADIUS = 10
 local world_path = core.get_worldpath()
 local places_file = world_path .. "/places.json"
-
 local player_hud = {}
+local up = vector.new(0, 1, 0)
+local grid = {}
+local places;
 
--- =========================
--- Load / Save
--- =========================
+local function cell_key(x, y, z)
+	return x .. ":" .. y .. ":" .. z
+end
+
+local function to_cell(pos)
+	return math.floor(pos.x / CELL_SIZE),
+	       math.floor(pos.y / CELL_SIZE),
+	       math.floor(pos.z / CELL_SIZE)
+end
 
 local function load_places()
 	local f = io.open(places_file, "r")
@@ -27,21 +35,7 @@ local function load_places()
 	return {}
 end
 
-local places = load_places()
 
-local function save_places_json()
-	local f = io.open(places_file, "w")
-	if not f then
-		core.log("error", "[placenames] Could not open file: " .. places_file)
-		return
-	end
-	f:write(core.write_json(places, true))
-	f:close()
-end
-
--- =========================
--- Rect storage helpers
--- =========================
 
 local function get_min_max(a, b)
 	return {
@@ -53,23 +47,6 @@ local function get_min_max(a, b)
 		y = math.max(a.y, b.y),
 		z = math.max(a.z, b.z),
 	}
-end
-
--- =========================
--- Grid
--- =========================
-
-local CELL_SIZE = 50
-local grid = {}
-
-local function cell_key(x, y, z)
-	return x .. ":" .. y .. ":" .. z
-end
-
-local function to_cell(pos)
-	return math.floor(pos.x / CELL_SIZE),
-	       math.floor(pos.y / CELL_SIZE),
-	       math.floor(pos.z / CELL_SIZE)
 end
 
 local function rebuild_grid()
@@ -102,14 +79,26 @@ local function rebuild_grid()
 	end
 end
 
-rebuild_grid()
+local function init()
+	places = load_places()
+	rebuild_grid()
+end
 
--- =========================
--- Lookup
--- =========================
+init()
 
-local function get_current_place(player)
-	local pos = vector.round(player:get_pos())
+local function save_places_json()
+	local f = io.open(places_file, "w")
+	if not f then
+		core.log("error", "[placenames] Could not open file: " .. places_file)
+		return
+	end
+	f:write(core.write_json(places, true))
+	f:close()
+	rebuild_grid()
+end
+
+local function get_current_place(pos)
+	pos = vector.round(pos + up)
 	local cx, cy, cz = to_cell(pos)
 
 	for dx = -1, 1 do
@@ -138,10 +127,6 @@ local function get_current_place(player)
 	return nil
 end
 
--- =========================
--- Privs
--- =========================
-
 core.register_privilege("place_edit", {
 	description = "Allows adding, removing, or resizing named places",
 	give_to_singleplayer = true,
@@ -151,15 +136,53 @@ local function can_edit(playername)
 	return core.check_player_privs(playername, { place_edit = true })
 end
 
--- =========================
--- API
--- =========================
+local function get_bounds_from_raycast(pos, range)
+	range = range or DEFAULT_RADIUS
+	pos = pos + up
+
+    local function cast(dir)
+        local target = vector.add(pos, vector.multiply(dir, range))
+        local ray = core.raycast(pos, target, false, false)
+
+        for pointed in ray do
+            if pointed.type == "node" then
+                local hit = pointed.under
+                local node = core.get_node(hit)
+                local def = core.registered_nodes[node.name]
+
+                if def and def.walkable then
+                    return hit
+                end
+            end
+        end
+
+        return vector.round(target)
+    end
+
+    local px = cast({x=1,y=0,z=0})
+    local nx = cast({x=-1,y=0,z=0})
+    local pz = cast({x=0,y=0,z=1})
+    local nz = cast({x=0,y=0,z=-1})
+    local py = cast({x=0,y=1,z=0})
+    local ny = cast({x=0,y=-1,z=0})
+
+    local minp = {
+        x = nx.x,
+        y = ny.y,
+        z = nz.z
+    }
+
+    local maxp = {
+        x = px.x,
+        y = py.y,
+        z = pz.z
+    }
+
+    return minp, maxp
+end
 
 local function register_place(name, pos)
-	local p = vector.round(pos)
-
-	local a = { x = p.x - DEFAULT_RADIUS, y = p.y - DEFAULT_RADIUS, z = p.z - DEFAULT_RADIUS }
-	local b = { x = p.x + DEFAULT_RADIUS, y = p.y + DEFAULT_RADIUS, z = p.z + DEFAULT_RADIUS }
+	local a, b = get_bounds_from_raycast(pos)
 
 	local place = {
 		name = name,
@@ -169,12 +192,11 @@ local function register_place(name, pos)
 
 	places[#places + 1] = place
 	save_places_json()
-	rebuild_grid()
 	return place
 end
 
 local function rename_current_place(player, new_name)
-	local place = get_current_place(player)
+	local place = get_current_place(player:get_pos())
 	if not place then return nil end
 
 	place.name = new_name
@@ -183,24 +205,19 @@ local function rename_current_place(player, new_name)
 end
 
 local function remove_current_place(player)
-	local place = get_current_place(player)
+	local place = get_current_place(player:get_pos())
 	if not place then return false end
 
 	for i = #places, 1, -1 do
 		if places[i] == place then
 			table.remove(places, i)
 			save_places_json()
-			rebuild_grid()
 			return place
 		end
 	end
 
 	return false
 end
-
--- =========================
--- Commands
--- =========================
 
 core.register_chatcommand("place_name", {
 	params = "<name>",
@@ -215,6 +232,26 @@ core.register_chatcommand("place_name", {
 		register_place(param, player:get_pos())
 		return true, "Added: " .. param
 	end,
+})
+
+core.register_chatcommand("place_move", {
+	params = "<name>",
+	description = "Add a place at your current position",
+	func = function(playername, param)
+
+		local pos = core.get_player_by_name(playername):get_pos()
+		local minp, maxp = get_bounds_from_raycast(pos)
+		local place = get_current_place(pos)
+
+		if not place then return false, "No place here" end
+
+		place.min = minp
+		place.max = maxp
+
+		save_places_json()
+
+		return true, "Moved place " .. place.name .. " to: " .. vector.to_string(minp) .. vector.to_string(maxp)
+	end
 })
 
 core.register_chatcommand("place_rename", {
@@ -245,10 +282,6 @@ core.register_chatcommand("place_remove", {
 	end,
 })
 
--- =========================
--- HUD
--- =========================
-
 local player_last_pos = {}
 local player_hud_id = {}
 
@@ -275,28 +308,28 @@ core.register_globalstep(function(dtime)
 
 	for _, player in ipairs(core.get_connected_players()) do
 		local name = player:get_player_name()
-		local pos = vector.round(player:get_pos())
+		-- local pos = vector.round(player:get_pos())
 
-		local last = player_last_pos[name]
-		if last then
-			local dx = pos.x - last.x
-			local dy = pos.y - last.y
-			local dz = pos.z - last.z
-			if dx*dx + dy*dy + dz*dz < MOVE_THRESHOLD * MOVE_THRESHOLD then
-				goto continue
-			end
-		end
+		-- local last = player_last_pos[name]
+		-- if last then
+		-- 	local dx = pos.x - last.x
+		-- 	local dy = pos.y - last.y
+		-- 	local dz = pos.z - last.z
+		-- 	if dx*dx + dy*dy + dz*dz < MOVE_THRESHOLD * MOVE_THRESHOLD then
+		-- 		goto continue
+		-- 	end
+		-- end
 
-		player_last_pos[name] = pos
+		-- player_last_pos[name] = pos
 
-		local place = get_current_place(player)
+		local place = get_current_place(player:get_pos())
 		local hud = player_hud_id[name]
 
 		if hud then
 			player:hud_change(hud, "text", place and place.name or "")
 		end
 
-		::continue::
+		-- ::continue::
 	end
 end)
 
@@ -309,31 +342,76 @@ local overlay_timer = 0
 local OVERLAY_INTERVAL = 0.2
 local OVERLAY_STEP = 2
 
+
+
 local function draw_rect_outline(place)
-	print('called')
+    local minp = place.min
+    local maxp = place.max
 
-	print(dump(place))
+    local tex = "default_mese_block.png^[colorize:#00FF00:150"
 
-	local minp = place.min
-	local maxp = place.max
+    -- top/bottom faces (y = min/max)
+    for x = minp.x, maxp.x, OVERLAY_STEP do
+    for z = minp.z, maxp.z, OVERLAY_STEP do
+        core.add_particle({
+            pos = { x = x, y = minp.y, z = z },
+            expirationtime = OVERLAY_INTERVAL,
+            size = 2,
+            texture = tex,
+            glow = 10
+        })
 
-	local tex = "default_mese_block.png^[colorize:#00FF00:150"
+        core.add_particle({
+            pos = { x = x, y = maxp.y, z = z },
+            expirationtime = OVERLAY_INTERVAL,
+            size = 2,
+            texture = tex,
+            glow = 10
+        })
+    end
+    end
 
-	for x = minp.x, maxp.x, OVERLAY_STEP do
-	for z = minp.z, maxp.z, OVERLAY_STEP do
-		-- FIXME: WEIRD!
-		print(type(x) .. ':' .. z .. ':' .. minp.y .. ':' .. maxp.y)
-		core.add_particle({ pos = { x = x, y = minp.y, z = z }, velocity = {0,0,0}, expirationtime = OVERLAY_INTERVAL, size = 2, texture = tex, glow = 10 })
-		core.add_particle({ pos = { x = x, y = maxp.y, z = z }, velocity = {0,0,0}, expirationtime = OVERLAY_INTERVAL, size = 2, texture = tex, glow = 10 })
-	end
-	end
+    -- front/back faces (z = min/max)
+    for x = minp.x, maxp.x, OVERLAY_STEP do
+    for y = minp.y, maxp.y, OVERLAY_STEP do
+        core.add_particle({
+            pos = { x = x, y = y, z = minp.z },
+            expirationtime = OVERLAY_INTERVAL,
+            size = 2,
+            texture = tex,
+            glow = 10
+        })
 
-	for y = minp.y, maxp.y, OVERLAY_STEP do
-	for x = minp.x, maxp.x, OVERLAY_STEP do
-		core.add_particle({ pos = { x = x, y = y, z = minp.z }, velocity = {0,0,0}, expirationtime = OVERLAY_INTERVAL, size = 2, texture = tex, glow = 10 })
-		core.add_particle({ pos = { x = x, y = y, z = maxp.z }, velocity = {0,0,0}, expirationtime = OVERLAY_INTERVAL, size = 2, texture = tex, glow = 10 })
-	end
-	end
+        core.add_particle({
+            pos = { x = x, y = y, z = maxp.z },
+            expirationtime = OVERLAY_INTERVAL,
+            size = 2,
+            texture = tex,
+            glow = 10
+        })
+    end
+    end
+
+    -- left/right faces (x = min/max)  <-- missing part added
+    for z = minp.z, maxp.z, OVERLAY_STEP do
+    for y = minp.y, maxp.y, OVERLAY_STEP do
+        core.add_particle({
+            pos = { x = minp.x, y = y, z = z },
+            expirationtime = OVERLAY_INTERVAL,
+            size = 2,
+            texture = tex,
+            glow = 10
+        })
+
+        core.add_particle({
+            pos = { x = maxp.x, y = y, z = z },
+            expirationtime = OVERLAY_INTERVAL,
+            size = 2,
+            texture = tex,
+            glow = 10
+        })
+    end
+    end
 end
 
 core.register_chatcommand("place_overlay", {
@@ -344,7 +422,6 @@ core.register_chatcommand("place_overlay", {
 	end,
 })
 
-
 core.register_globalstep(function(dtime)
 	overlay_timer = overlay_timer + dtime
 	if overlay_timer < OVERLAY_INTERVAL then return end
@@ -354,7 +431,7 @@ core.register_globalstep(function(dtime)
 		local name = player:get_player_name()
 
 		if overlay_enabled[name] then
-			local place = get_current_place(player)
+			local place = get_current_place(player:get_pos())
 
 			if place then
 				draw_rect_outline(place)
