@@ -3,7 +3,7 @@ local CELL_SIZE = 50
 
 local world_path = core.get_worldpath()
 local places_file = world_path .. "/places.json"
-local player_hud = {}
+-- local player_hud = {}
 local up = vector.new(0, 1, 0)
 local grid = {}
 local places;
@@ -282,12 +282,12 @@ core.register_chatcommand("place_remove", {
 	end,
 })
 
-local player_last_pos = {}
+-- local player_last_pos = {}
 local player_hud_id = {}
 
 local hud_timer = 0
 local HUD_INTERVAL = 0.5
-local MOVE_THRESHOLD = 4
+-- local MOVE_THRESHOLD = 4
 
 core.register_on_joinplayer(function(player)
 	local id = player:hud_add({
