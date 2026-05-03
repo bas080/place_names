@@ -59,26 +59,22 @@ local function rebuild_grid()
 		local a = place.min
 		local b = place.max
 
-		if not a then
-			goto continue
-		end
+		if a then
+			local minp, maxp = get_min_max(a, b)
 
-		local minp, maxp = get_min_max(a, b)
+			local minx, miny, minz = to_cell(minp)
+			local maxx, maxy, maxz = to_cell(maxp)
 
-		local minx, miny, minz = to_cell(minp)
-		local maxx, maxy, maxz = to_cell(maxp)
-
-		for x = minx, maxx do
-		for y = miny, maxy do
-		for z = minz, maxz do
-			local key = cell_key(x, y, z)
-			grid[key] = grid[key] or {}
-			grid[key][#grid[key] + 1] = place
+			for x = minx, maxx do
+			for y = miny, maxy do
+			for z = minz, maxz do
+				local key = cell_key(x, y, z)
+				grid[key] = grid[key] or {}
+				grid[key][#grid[key] + 1] = place
+			end
+			end
+			end
 		end
-		end
-		end
-
-		::continue::
 	end
 end
 
