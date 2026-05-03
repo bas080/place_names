@@ -81,8 +81,46 @@ end
 
 local function init()
 	places = load_places()
+	for _, place in ipairs(places) do
+		setmetatable(place, place_mt)
+	end
 	rebuild_grid()
 end
+
+local place_mt = {
+    __index = {
+        remove = function(self)
+            for i = #places, 1, -1 do
+                if places[i] == self then
+                    table.remove(places, i)
+                    save_places_json()
+                    return true
+                end
+            end
+            return false
+        end,
+        rename = function(self, new_name)
+            self.name = new_name
+            save_places_json()
+        end,
+        set_bounds = function(self, min, max)
+            self.min = min
+            self.max = max
+            save_places_json()
+            rebuild_grid()
+        end,
+        get_center = function(self)
+            return {
+                x = (self.min.x + self.max.x) / 2,
+                y = (self.min.y + self.max.y) / 2,
+                z = (self.min.z + self.max.z) / 2,
+            }
+        end,
+        get_size = function(self)
+            return vector.subtract(self.max, self.min)
+        end,
+    }
+}
 
 init()
 
@@ -195,29 +233,88 @@ local function register_place(name, pos)
 	return place
 end
 
-local function rename_current_place(player, new_name)
-	local place = get_current_place(player:get_pos())
-	if not place then return nil end
+-- =========================
+-- Public API
+-- =========================
 
-	place.name = new_name
-	save_places_json()
-	return place
+local place_names = {}
+
+place_names.register_place = function(name, min, max)
+    if type(name) ~= "string" or name == "" then return nil end
+    if not min or not max or type(min) ~= "table" or type(max) ~= "table" then return nil end
+    local place = {
+        name = name,
+        min = min,
+        max = max
+    }
+    setmetatable(place, place_mt)
+    places[#places + 1] = place
+    save_places_json()
+    return place
 end
 
-local function remove_current_place(player)
-	local place = get_current_place(player:get_pos())
-	if not place then return false end
-
-	for i = #places, 1, -1 do
-		if places[i] == place then
-			table.remove(places, i)
-			save_places_json()
-			return place
-		end
-	end
-
-	return false
+place_names.get_place = function(pos)
+    if not pos or type(pos) ~= "table" then return nil end
+    return get_current_place(pos)
 end
+
+place_names.get_current_place = function(player)
+    if not player then return nil end
+    return get_current_place(player:get_pos())
+end
+
+place_names.get_place_by_pos = function(pos)
+    if not pos or type(pos) ~= "table" then return nil end
+    return get_current_place(pos)
+end
+
+place_names.get_place_by_name = function(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    for _, place in ipairs(places) do
+        if place.name == name then
+            return place
+        end
+    end
+    return nil
+end
+
+place_names.get_all_places = function()
+    return places
+end
+
+local on_enter_callbacks = {}
+local on_leave_callbacks = {}
+
+place_names.register_on_place_enter = function(func)
+    if type(func) == "function" then
+        table.insert(on_enter_callbacks, func)
+        return function()
+            for i, cb in ipairs(on_enter_callbacks) do
+                if cb == func then
+                    table.remove(on_enter_callbacks, i)
+                    return
+                end
+            end
+        end
+    end
+end
+
+place_names.register_on_place_leave = function(func)
+    if type(func) == "function" then
+        table.insert(on_leave_callbacks, func)
+        return function()
+            for i, cb in ipairs(on_leave_callbacks) do
+                if cb == func then
+                    table.remove(on_leave_callbacks, i)
+                    return
+                end
+            end
+        end
+    end
+end
+
+-- Expose globally
+_G.place_names = place_names
 
 core.register_chatcommand("place_name", {
 	params = "<name>",
@@ -235,8 +332,8 @@ core.register_chatcommand("place_name", {
 })
 
 core.register_chatcommand("place_move", {
-	params = "<name>",
-	description = "Add a place at your current position",
+	params = "",
+	description = "Resize/move current place to raycasted bounds",
 	func = function(playername, param)
 
 		local pos = core.get_player_by_name(playername):get_pos()
@@ -245,12 +342,9 @@ core.register_chatcommand("place_move", {
 
 		if not place then return false, "No place here" end
 
-		place.min = minp
-		place.max = maxp
+		place:set_bounds(minp, maxp)
 
-		save_places_json()
-
-		return true, "Moved place " .. place.name .. " to: " .. vector.to_string(minp) .. vector.to_string(maxp)
+		return true, "Resized place " .. place.name .. " to: " .. core.pos_to_string(minp) .. " - " .. core.pos_to_string(maxp)
 	end
 })
 
@@ -259,12 +353,13 @@ core.register_chatcommand("place_rename", {
 	description = "Rename current place",
 	func = function(playername, param)
 		if not can_edit(playername) then return false, "No permission" end
-		if param == "" then return false, "Usage: /placeedit <name>" end
+		if param == "" then return false, "Usage: /place_rename <new name>" end
 
 		local player = core.get_player_by_name(playername)
-		local place = rename_current_place(player, param)
+		local place = place_names.get_current_place(player)
 
 		if not place then return false, "No place here" end
+		place:rename(param)
 		return true, "Renamed to: " .. param
 	end,
 })
@@ -275,15 +370,17 @@ core.register_chatcommand("place_remove", {
 		if not can_edit(playername) then return false, "No permission" end
 
 		local player = core.get_player_by_name(playername)
-		local place = remove_current_place(player)
+		local place = place_names.get_current_place(player)
 
 		if not place then return false, "No place here" end
+		place:remove()
 		return true, "Removed: " .. place.name
 	end,
 })
 
 -- local player_last_pos = {}
 local player_hud_id = {}
+local player_last_place = {}
 
 local hud_timer = 0
 local HUD_INTERVAL = 0.5
@@ -327,6 +424,21 @@ core.register_globalstep(function(dtime)
 
 		if hud then
 			player:hud_change(hud, "text", place and place.name or "")
+		end
+
+		local last = player_last_place[name]
+		if last ~= place then
+			if last then
+				for _, cb in ipairs(on_leave_callbacks) do
+					cb(player, last)
+				end
+			end
+			if place then
+				for _, cb in ipairs(on_enter_callbacks) do
+					cb(player, place)
+				end
+			end
+			player_last_place[name] = place
 		end
 
 		-- ::continue::
