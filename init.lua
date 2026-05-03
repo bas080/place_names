@@ -1,3 +1,4 @@
+-- luacheck: read_globals core vector
 local DEFAULT_RADIUS = 20
 local CELL_SIZE = 50
 
@@ -7,6 +8,8 @@ local places_file = world_path .. "/places.json"
 local up = vector.new(0, 1, 0)
 local grid = {}
 local places;
+local save_places_json
+local place_mt
 
 local function cell_key(x, y, z)
 	return x .. ":" .. y .. ":" .. z
@@ -79,15 +82,7 @@ local function rebuild_grid()
 	end
 end
 
-local function init()
-	places = load_places()
-	for _, place in ipairs(places) do
-		setmetatable(place, place_mt)
-	end
-	rebuild_grid()
-end
-
-local place_mt = {
+place_mt = {
     __index = {
         remove = function(self)
             for i = #places, 1, -1 do
@@ -122,9 +117,17 @@ local place_mt = {
     }
 }
 
+local function init()
+    places = load_places()
+    for _, place in ipairs(places) do
+        setmetatable(place, place_mt)
+    end
+    rebuild_grid()
+end
+
 init()
 
-local function save_places_json()
+save_places_json = function()
 	local f = io.open(places_file, "w")
 	if not f then
 		core.log("error", "[placenames] Could not open file: " .. places_file)
@@ -334,17 +337,21 @@ core.register_chatcommand("place_name", {
 core.register_chatcommand("place_move", {
 	params = "",
 	description = "Resize/move current place to raycasted bounds",
-	func = function(playername, param)
+	func = function(playername)
 
 		local pos = core.get_player_by_name(playername):get_pos()
 		local minp, maxp = get_bounds_from_raycast(pos)
 		local place = get_current_place(pos)
 
-		if not place then return false, "No place here" end
+		if not place then
+			return false, "No place here"
+		end
 
 		place:set_bounds(minp, maxp)
 
-		return true, "Resized place " .. place.name .. " to: " .. core.pos_to_string(minp) .. " - " .. core.pos_to_string(maxp)
+		local msg = "Resized place " .. place.name .. " to: " ..
+			vector.to_string(minp) .. " - " .. vector.to_string(maxp)
+		return true, msg
 	end
 })
 
